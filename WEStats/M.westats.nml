@@ -1,0 +1,15 @@
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+! WEStats - namelist parameter file 
+!------------------------------------------------------------
+&WESTATS_CFGS
+     ModelDirectory = 'M.ModelDirectory'
+     DynamicsTimeStepNumber = M.DynamicsTimeStepNumber
+     DynamicsLevelIP1 = M.IP1
+     MesoGeophyFile = 'M.geophy'
+     WindClimateTable = 'M.table_ef'
+     AveragingLength = M.AveragingLength
+     StatsLevel = M.StatsLevel
+     MaxWindSpeed = M.MaxWindSpeed
+     delete_intermediate_files = M.delete
+     StatsFile = 'M.Stats'
+/

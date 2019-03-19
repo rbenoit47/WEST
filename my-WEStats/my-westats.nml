@@ -1,0 +1,15 @@
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+! WEStats - namelist parameter file 
+!------------------------------------------------------------
+&WESTATS_CFGS
+     ModelDirectory = 'my-model-directory'
+     DynamicsTimeStepNumber = 360
+     DynamicsLevelIP1 = 12011
+     MesoGeophyFile = 'MesoGeo.fst'
+     WindClimateTable = 'WindClimateDB_Annual/56/118_table.ef'
+     AveragingLength = 3
+     StatsLevel = 50
+     MaxWindSpeed = 25
+     delete_intermediate_files = True
+     StatsFile = 'my-stats.fst'
+/

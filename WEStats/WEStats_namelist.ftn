@@ -1,0 +1,78 @@
+*    WEST   Wind simulation application
+*    Copyright (C) 2010-2011  "Her Majesty the Queen in Right of Canada"
+*    Contact: service.rpn@ec.gc.ca
+*
+*    This library is free software; you can redistribute it and/or
+*    modify it under the terms of the GNU Lesser General Public
+*    License as published by the Free Software Foundation; either
+*    version 2.1 of the License, or (at your option) any later version.
+*
+*    This library is distributed in the hope that it will be useful,
+*    but WITHOUT ANY WARRANTY; without even the implied warranty of
+*    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+*    Lesser General Public License for more details.
+*
+*    You should have received a copy of the GNU Lesser General Public
+*    License along with this library; if not, write to the Free Software
+*    Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+    
+      subroutine read_namelist(
+     $              nmlFilename,
+     $              modelDirectory,
+     $              dynamicsTimeStepNumber,
+     $              dynamicsLevelIP1,
+     $              mesoGeophyFile,
+     $              windClimateTable,
+     $              averagingLength,
+     $              statsLevel,
+     $              maxWindSpeed,
+     $              delete_intermediate_files,
+     $              statsFile
+     $)
+      implicit none
+*
+      character*256 nmlFilename
+*
+      character*256 modelDirectory
+      integer       dynamicsTimeStepNumber
+      integer       dynamicsLevelIP1
+      character*256 mesoGeophyFile
+      character*256 windClimateTable
+      integer       averagingLength
+      real          statsLevel
+      integer       maxWindSpeed
+      logical       delete_intermediate_files
+      character*256 statsFile
+*
+      integer ltp1
+      namelist /WEStats_cfgs/
+     $            modelDirectory,
+     $            dynamicsTimeStepNumber,
+     $            dynamicsLevelIP1,
+     $            mesoGeophyFile,
+     $            windClimateTable,
+     $            averagingLength,
+     $            statsLevel,
+     $            maxWindSpeed,
+     $            delete_intermediate_files,
+     $            statsFile
+*
+      integer unNml
+      data unNml /23/
+*
+      open(unNml, file=nmlFilename, access='SEQUENTIAL',
+     $     form='FORMATTED', status='OLD')
+      read(unNml, nml=WEStats_cfgs)
+      close(unNml)
+*
+      ltp1 = len(trim(modelDirectory))+1
+      modelDirectory(ltp1:ltp1) = char(0)
+      ltp1 = len(trim(mesoGeophyFile))+1
+      mesoGeophyFile(ltp1:ltp1) = char(0)
+      ltp1 = len(trim(windClimateTable))+1
+      windClimateTable(ltp1:ltp1) = char(0)
+      ltp1 = len(trim(statsFile))+1
+      statsFile(ltp1:ltp1) = char(0)
+*
+      return
+      end

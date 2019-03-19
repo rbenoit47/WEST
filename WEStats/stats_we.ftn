@@ -1,0 +1,1029 @@
+*    WEST   Wind simulation application
+*    Copyright (C) 2010-2011  "Her Majesty the Queen in Right of Canada"
+*    Contact: service.rpn@ec.gc.ca
+*    Authors: R. Benoit, A. Glazer
+*
+*    This library is free software; you can redistribute it and/or
+*    modify it under the terms of the GNU Lesser General Public
+*    License as published by the Free Software Foundation; either
+*    version 2.1 of the License, or (at your option) any later version.
+*
+*    This library is distributed in the hope that it will be useful,
+*    but WITHOUT ANY WARRANTY; without even the implied warranty of
+*    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+*    Lesser General Public License for more details.
+*
+*    You should have received a copy of the GNU Lesser General Public
+*    License along with this library; if not, write to the Free Software
+*    Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+    
+!CHC/NRC      program stats_we
+        LOGICAL FUNCTION stats_we(uv_name, we_name, table_name, rose_name,
+     $  region, n_etats,
+c     $ normalize, i_wr_out, j_wr_out,
+     $  ip1_uv, z_stats, ndx_rose, maxv, in_step,
+     $  log_file)
+*
+*     rb oct 2001.  first test on suez climate runs
+*     AG mai 2004
+*     1. lecture: elimination de powerlaw, genstatswe ne le fournit pas
+*     2. bon ordre des champs lors de lecture de table,
+*     3. EU2 deviation std pour la vitesse moyenne
+*     4. Angles calculated differently (ezscint)
+*     5. ip2 replace ip3 comme critere de recherche(ip3=0)
+
+*
+      implicit none
+*
+*     standard files -based
+*
+      integer ier
+      integer  fnom, fstouv, fstlir, fstfrm, fclos, fstprm, fstecr,
+     $     fstinf
+      external fnom, fstouv, fstlir, fstfrm, fclos, fstprm, fstecr,
+     $     fstinf
+      character*12 etiket, etiket_ok
+
+      integer uv_unit, we_unit, table_unit, rose_unit
+      parameter ( uv_unit=51, we_unit=52, table_unit=53,
+     $            rose_unit=54)
+!CHC/NRC      character*80 uv_name, we_name, table_name, rose_name
+      character*256 uv_name, we_name, table_name, rose_name, log_file
+
+      integer imx, jmx, i, j, k, ni, nj, nk, n
+*     alberta 138x102 ! attention====exact fit of dimensions
+*     parameter ( imx=138, jmx=102)
+*     suez 101x137 ! attention====exact fit of dimensions
+*     parameter ( imx=101, jmx=137)
+*     gaspe 138x102 ! attention====exact fit of dimensions
+*     parameter ( imx=138, jmx=102)
+      integer i_wr_out,j_wr_out
+      integer maxstep, istep
+      parameter ( maxstep=1 )
+      integer step(maxstep)
+      integer datev, dateo, deet
+!CHC/NRC      parameter ( deet=120 )  !pour suez/ga 5km
+      integer maxvar, ivar
+      parameter ( maxvar=2 )
+!CHC/NRC      character*2 var_n_rpn(maxvar)
+      character*5 var_n_rpn(maxvar)
+      data var_n_rpn / 'UU','VV'/
+c
+      integer powerlaw
+c
+
+      INTEGER DATYP, DLTF, EXTRA1, EXTRA2, EXTRA3, IG1,
+     $     IG2, IG3, IG4,  IP1, IP2, IP3, LNG, NBITS,
+     $     NPAK, NPAS, SWA, UBC
+      integer ip1_uv
+      CHARACTER *2 NOMVAR
+      CHARACTER *1 GRTYP,TYPVAR
+
+*     structure de la table
+      character *12 id_rpn
+      character *11 id_riso
+      real dd_tab,uv_tab,shear,freq,weight, bidon
+
+      real, allocatable, dimension (:,:,:):: field !(imx,jmx,maxvar)
+      integer etat, n_etats     !climat
+*     data n_etats /183/    !alberta
+*     data n_etats /137/    !suez
+*     data n_etats /197/    !gaspe
+      integer nclass
+      parameter (nclass=8)  !classes in histogram
+      real, allocatable, dimension (:,:)::  e1, e2, eu, ev, euv, eu2 !(imx,jmx)
+*     ec=top cumulated eh
+      real, allocatable, dimension (:,:,:):: ec, eh !(imx,jmx,nclass)
+      integer maxv
+      real, allocatable, dimension (:) :: classv !(0:maxv)
+      real, allocatable, dimension (:,:,:):: uh !(imx,jmx,0:maxv+1)
+      integer nsect
+      parameter (nsect=12)  !sectors in windrose
+      real, allocatable, dimension (:,:):: en !(imx,jmx)sum of frequencies
+*     ewr(imx,jmx,nsect+1)   !  one extra for checksum
+      real, allocatable, dimension (:,:,:) :: ewr, eur, eur_n, ewr_n
+      real, allocatable, dimension (:,:,:,:) :: uhr
+      real    class(nclass+1)  ! en watt/m2
+      data class /0., 200., 300., 400., 500., 600., 800., 1000., 1.e10 /
+      real val, val_n, val_k, val_wr, val_ur, val_min, val_max, last_ok
+      real, allocatable, dimension (:) ::  val_uhr
+      integer ii,ii1,ii2,jj,jj1,jj2, ndx_rose
+!CHC/NRC      data ndx_rose/2/
+      real del_dd, dd_sect0 !CHC/NRC, dgrw, lon_ref, alpha
+*     wind energy  !s.i. units m3/s3 from kt input
+      real kt2ms, kt2ms3, deg2rad
+      data kt2ms /5.14791e-01/
+      real, allocatable, dimension (:,:) ::
+     $     we,u,v,uv,work,work2,z0,ustar,uv_norm
+     $                          ! (imx,jmx)
+      character *2 region
+      logical normalize
+      real  zuv, z0_class
+      real z_stats, shear_exp, z_factor
+      integer hx,hy,ni_z0,nj_z0
+      data hx,hy/3,3/
+      real, allocatable, dimension (:,:) :: z0_crop ! (imx-2*hx,jmx-2*hy)
+      data zuv /50./, z0_class/0.0002/
+*      data z_stats/50./, shear_exp/0.14/
+      data shear_exp/0.14/
+*
+* AG_25_juin declarations
+      integer gdid, ezqkdef, gdll, gdwdfuv, gdrls
+      external ezqkdef, gdll, gdwdfuv, gdrls
+        real, allocatable, dimension (:,:) :: spdllout, dirllout, lat, lon
+
+        integer logUnit         !CHC/NRC -  logFile unit number
+c     ------------------------------------------------------------------
+*
+        integer in_step         !CHC/NRC - passed in through call
+        step(1) = in_step       !CHC/NRC - assign passed in value
+        powerlaw = 0            !CHC/NRC - initialize this variable
+
+!CHC/NRC - these are deprecated variables
+        normalize = .False.
+        i_wr_out = 1
+        j_wr_out = 1
+
+        logUnit = 16
+
+        open(unit=logUnit, file=log_file, status='old', access='append')
+
+
+!CHC/NRC      read ( *, '(a80)' ) uv_name
+!CHC/NRC      read ( *, '(a80)' ) we_name
+!CHC/NRC      read ( *, '(a80)' ) table_name
+!CHC/NRC      read ( *, '(a80)' ) rose_name
+!CHC/NRC      read ( *, '(a2)' ) region
+!CHC/NRC      read *, n_etats
+!CHC/NRC      read *, dgrw, lon_ref
+!CHC/NRC      read *, normalize    ! z0 normalization
+!CHC/NRC      read *, i_wr_out,j_wr_out
+!CHC/NRC      read *, ip1_uv  ! choose a level
+!CHC/NRC      read *, z_stats  ! for downward interp below ip1_uv
+!CHC/NRC      read *, ndx_rose ! half-width of space average for the wind rose
+!CHC/NRC      read *, maxv ! Max wind speed for histogram
+!CHC/NRC      read *, step(1) ! Time step of the MC2 output for analysis
+c_AG      read *, powerlaw ! 1: use power law to do vertical extra-polation
+c                        0: use logarithmic to do ...
+
+        write(logUnit, *) ' '
+        write(logUnit, *) '******************************************************'
+        write(logUnit, *) '* Program: stats_we'
+        write(logUnit, *) '* Version: 1.0, Copyright (c) EC/CMC/RPN 2005'
+        write(logUnit, *) '* Authors: R. Benoit, A. Glazer'
+        write(logUnit, *) '******************************************************'
+
+c      write(logUnit, *) '  fichiers=',uv_name,we_name,table_name
+c      write(logUnit, *) '  region=',region
+c      write(logUnit, *) '  n_etats=',n_etats
+c      write(logUnit, *) 'dgrw, lon_ref=',dgrw, lon_ref
+c      write(logUnit, *) '  normalize =', normalize
+c      write(logUnit, *) '  i_wr_out,j_wr_out=',i_wr_out,j_wr_out
+c      write(logUnit, *) '  ip1_uv= ',ip1_uv
+c      write(logUnit, *) '  z_stats= ',z_stats
+c      write(logUnit, *) '  ndx_rose= ',ndx_rose
+c      write(logUnit, *) '  maxv= ', maxv
+c      write(logUnit, *) '  step(1)= ', step(1)
+c_AG      write(logUnit, *) ' powerlaw= ', powerlaw
+c
+c     ------------------------------------------------------------------
+c
+      ier = fnom ( uv_unit, uv_name, 'STD+RND', 0 )
+      ier = fstouv ( uv_unit, 'RND')
+        if(ier .lt. 0) then
+                write(logUnit, *) 'ERROR: while opening file:'          !CHC/NRC
+                write(logUnit, *) '  ', uv_name
+                stats_we = .FALSE.                                                              !CHC/NRC
+                ier = fstfrm ( uv_unit )
+                ier = fclos  ( uv_unit )
+                close(logUnit);
+                return                                                                                  !CHC/NRC
+        end if
+
+      ier = fnom ( we_unit, we_name, 'STD+RND', 0 )
+      ier = fstouv ( we_unit, 'RND')
+        if(ier .lt. 0) then
+                write(logUnit, *) 'ERROR: while opening file:'          !CHC/NRC
+                write(logUnit, *) '  ', we_name
+                stats_we = .FALSE.                                                              !CHC/NRC
+                ier = fstfrm ( uv_unit )
+                ier = fclos  ( uv_unit )
+                ier = fstfrm ( we_unit )
+                ier = fclos  ( we_unit )
+                close(logUnit);
+                return                                                                                  !CHC/NRC
+        end if
+
+      ier = fnom ( table_unit, table_name, 'FTN', 0 )
+        if(ier .lt. 0) then
+                write(logUnit, *) 'ERROR: while opening file:'          !CHC/NRC
+                write(logUnit, *) '  ', table_name
+                stats_we = .FALSE.                                                              !CHC/NRC
+                ier = fstfrm ( uv_unit )
+                ier = fclos  ( uv_unit )
+                ier = fstfrm ( we_unit )
+                ier = fclos  ( we_unit )
+                ier = fclos  ( table_unit )
+                close(logUnit);
+                return                                                                                  !CHC/NRC
+        end if
+
+c      ier = fnom ( rose_unit, rose_name, 'FTN', 0 )
+c       if(ier .lt. 0) then
+c             write(logUnit, *) 'ERROR: while opening file:'            !CHC/NRC
+c             write(logUnit, *) '  ', rose_name
+c             stats_we = .FALSE.                                                                !CHC/NRC
+c             close(logUnit);
+c                 return                                                                                        !CHC/NRC
+c       end if
+
+*     get dynamical dimensions from the wind file for imx,jmx
+      etiket=''
+      ier = fstinf(uv_unit, ni, nj, nk, -1, etiket, -1, -1,-1,
+     $             '', 'UU')
+        if(ier .lt. 0) then
+                write(logUnit, *) 'ERROR: while reading field UU:'              !CHC/NRC
+                stats_we = .FALSE.                                                              !CHC/NRC
+                ier = fstfrm ( uv_unit )
+                ier = fclos  ( uv_unit )
+                ier = fstfrm ( we_unit )
+                ier = fclos  ( we_unit )
+                ier = fclos  ( table_unit )
+c               ier = fclos  ( rose_unit )
+                close(logUnit);
+                return                                                                                  !CHC/NRC
+        end if
+
+      imx=ni
+      jmx=nj
+      write(logUnit, *) 'INFO: grid dimensions imx,jmx=',imx,jmx
+* allocate arrays related to imx, jmx
+      allocate (field(imx,jmx,maxvar))
+      allocate (e1(imx,jmx))
+      allocate (e2(imx,jmx))
+      allocate (eu(imx,jmx))
+      allocate (ev(imx,jmx))
+      allocate (euv(imx,jmx))
+      allocate (eu2(imx,jmx))
+      allocate (ec(imx,jmx,nclass))
+      allocate (eh(imx,jmx,nclass))
+      allocate (classv(0:maxv))
+      allocate (uh(imx,jmx,0:maxv+1))
+      allocate (en(imx,jmx))
+      allocate (ewr(imx,jmx,nsect+1))
+      allocate (eur(imx,jmx,nsect+1))
+      allocate (uhr(imx,jmx,0:maxv+1,nsect+1))
+      allocate (val_uhr(0:maxv+1))
+      allocate (ewr_n(imx,jmx,nsect+1))
+      allocate (eur_n(imx,jmx,nsect+1))
+      allocate (we(imx,jmx))
+      allocate (u (imx,jmx))
+      allocate (v (imx,jmx))
+      allocate (uv(imx,jmx))
+      allocate (work   (imx,jmx))
+      allocate (work2  (imx,jmx))
+      allocate (z0     (imx,jmx))
+      allocate (ustar  (imx,jmx))
+      allocate (uv_norm(imx,jmx))
+      allocate (z0_crop(imx-2*hx,jmx-2*hy))
+* AG_25_juin start
+      allocate (spdllout(imx,jmx))
+      allocate (dirllout(imx,jmx))
+      allocate (lat     (imx,jmx))
+      allocate (lon     (imx,jmx))
+* AG_25_juin end
+*
+c$$$*     test read de table
+c$$$      if (region.eq.'su') read (table_unit,*), id_rpn, id_riso
+c$$$      if (region.ne.'su') read (table_unit,*), id_rpn, dd_tab
+c$$$      write(logUnit, *)             id_rpn
+c$$$      rewind table_unit
+*
+*     init les stats
+*
+      do j=1,jmx
+         do i=1,imx
+            e1(i,j)=0.
+            e2(i,j)=0.
+            en(i,j)=0.
+            eu(i,j)=0.
+            ev(i,j)=0.
+            euv(i,j)=0.
+            eu2(i,j)=0.
+            do k=1,nclass
+               eh(i,j,k)=0.
+               ec(i,j,k)=0.
+            enddo
+            do k=0,maxv
+               if ( k .eq. 0 ) then
+                  classv(k) = 0.2
+               else
+                  classv(k) = k
+               endif
+               uh(i,j,k)=0.
+            enddo
+            uh(i,j,maxv+1) = 0.
+c
+            do k=1,nsect+1
+               ewr(i,j,k)=0.
+               eur(i,j,k)=0.
+               do n = 0, maxv+1
+                  uhr(i,j,n,k) = 0.
+               enddo
+            enddo
+         enddo
+      enddo
+*
+*     angles convention:  [0-360]
+*
+      del_dd=360./nsect  ! width of the windrose sector.  dd=0=north
+      dd_sect0=0.-0.5*del_dd
+      if (dd_sect0.lt.0.) dd_sect0=dd_sect0+360.
+*     attention:
+*     geometrie de grille mc2 pour eole est avec mapscale=1
+c      alpha=270.-lon_ref-dgrw
+c      if (nint(alpha).ge.360.) alpha=alpha-360.
+c      write(logUnit, *) ' alpha=',alpha
+      kt2ms3=kt2ms**3
+      deg2rad=acos(-1.)/180.
+      if (normalize .or. powerlaw .eq. 0 ) then
+*     get the roughness field (2B)
+*     NB: at time zero
+         ier = fstlir ( z0_crop, uv_unit, ni_z0, nj_z0, nk,
+     &        -1, '', 0,0,0, '', '2B')
+        if(ier .lt. 0) then
+                write(logUnit, *) 'ERROR: while reading field 2B:'              !CHC/NRC
+                stats_we = .FALSE.                                                              !CHC/NRC
+                ier = fstfrm ( uv_unit )
+                ier = fclos  ( uv_unit )
+                ier = fstfrm ( we_unit )
+                ier = fclos  ( we_unit )
+                ier = fclos  ( table_unit )
+c               ier = fclos  ( rose_unit )
+                close(logUnit);
+                return                                                                                  !CHC/NRC
+        end if
+
+!CHC/NRC         if (ni_z0.ne.imx-2*hx.or.nj_z0.ne.jmx-2*hy) stop
+         if (ni_z0.ne.imx-2*hx.or.nj_z0.ne.jmx-2*hy) then               !CHC/NRC
+                        write(logUnit, *) 'ERROR: field 2B size is invalid'             !CHC/NRC
+                        stats_we = .FALSE.                                                              !CHC/NRC
+                        ier = fstfrm ( uv_unit )
+                        ier = fclos  ( uv_unit )
+                        ier = fstfrm ( we_unit )
+                        ier = fclos  ( we_unit )
+                        ier = fclos  ( table_unit )
+c                       ier = fclos  ( rose_unit )
+                        close(logUnit);
+                        return                                                                                  !CHC/NRC
+           endif                                                                                                !CHC/NRC
+
+*     put z0_crop in the complete field
+         do j=1,jmx
+            do i=1,imx
+               z0(i,j)=0.0001   ! background for halo ....
+            enddo
+         enddo
+         do j=1,nj_z0
+            do i=1,ni_z0
+               z0(i+hx,j+hy)=z0_crop(i,j)
+            enddo
+         enddo
+      endif
+c
+c     ------------------------------------------------------------------
+c
+* AG_25_juin start
+*
+* we need grid parameters in the loop for angle calculations
+* so we determine them here and not after the loop etats
+* etiket_ok is here replaced by etiket
+* step(istep) is here replaced by -1
+* as they are not assigned yet
+*
+*     before loop etats, to get the IGs (due to Z record type
+*
+c      write(logUnit, *) ' calling fstinf before loop etats'
+      ier = fstinf(uv_unit, ni, nj, nk, -1, etiket, -1, -1, -1,
+     $             '', 'UU')
+      i = fstprm(ier, dateo, deet, npas, ni, nj, nk, nbits, datyp,
+     $     ip1,
+     $     ip2, ip3, typvar, nomvar, etiket, grtyp, ig1, ig2, ig3,
+     $     ig4, swa, lng, dltf, ubc, extra1, extra2, extra3)
+c      write(logUnit, *) ' ig...=',ig1, ig2, ig3,ig4
+*
+* the values printed are the same
+* AG_25_juin end
+*
+*     loop sur les etats climatiques (etiquettes)
+*     n_etats=1                 !testing
+      istep=1
+*     step(1)=-1
+*     z_factor for height change
+      zuv=5*(ip1_uv-12001)
+      z_factor=(z_stats/zuv)**shear_exp
+c      write(logUnit, *) '  z_factor, zuv, z_stats=',z_factor, zuv, z_stats
+*
+        read (table_unit,*)             !CHC/NRC - skip first 2 header records
+        read (table_unit,*)             !CHC/NRC
+
+        write(logUnit, *) ' '
+        write(logUnit, *) '************************************'
+        write(logUnit, *) 'INFO: Scan Climate table and UV file'
+c       write(logUnit, *) '    ', uv_name
+c       write(logUnit, *) '  to match UU and VV records in file:'
+cCHC/NRC      do etat=1,n_etats
+
+        etat = 0
+        do while(etat .lt. n_etats)
+
+
+
+         if (region.eq.'su') then
+            read (table_unit,*),
+     $        id_rpn, id_riso, dd_tab, uv_tab,shear,freq,weight
+         else
+*     freq is in percent unit i.e. 0<=freq<=100
+            read (table_unit,*, end=9876, err=9875),
+
+c****************AG****************comments******
+C_AGc     $        id_rpn, dd_tab, uv_tab,shear,freq,weight
+C_AG     $        id_rpn, bidon, bidon, bidon, bidon, bidon, bidon, bidon,
+C_AG     &        bidon, bidon, bidon, bidon, bidon, bidon, bidon, bidon,
+C_AG     &        bidon, freq
+c****************AG****************comments******
+
+     $        id_rpn, dd_tab, uv_tab,shear,freq,weight,bidon, bidon,
+     &        bidon, bidon, bidon, bidon, bidon, bidon, bidon, bidon,
+     &        bidon, bidon, bidon
+cCHC/NRC              write(logUnit, *)  'Read climate state:', id_rpn, 'freq:', freq
+c              write(logUnit, *)  'id_rpn, freq=', id_rpn, freq
+         endif
+         etiket=id_rpn
+           write(logUnit, *) ' Processing climate state: ', id_rpn
+         do  ivar = 1, maxvar
+            ip1=-1
+            if (var_n_rpn(ivar).eq.'UU'.or.var_n_rpn(ivar).eq.'VV')
+     $           ip1=ip1_uv
+c
+cCHC/NRC            write(logUnit, *)  'Before reading: etiket, ip1, step, istep=',
+cCHC/NRC     &               etiket, ip1, step(istep), istep
+c_AG         write(logUnit, *) 'dateo=',dateo
+c_AG         write(logUnit, *) 'deet=',deet
+c_AG         write(logUnit, *) 'npas=',npas
+c_AG         write(logUnit, *) 'ip2=',ip2
+c
+            ier = fstlir ( field(1,1,ivar), uv_unit, ni, nj, nk,
+     &        -1, etiket, ip1, ip2,-1, '', var_n_rpn(ivar))
+c_AG_before     &        -1, etiket, ip1, -1,step(istep), '', var_n_rpn(ivar))
+c*** debug
+cCHC/NRC            write(logUnit, *)  'etat,var_n_rpn(ivar),field(1,1,ivar),ier=',
+cCHC/NRC     &              etat,var_n_rpn(ivar),field(1,1,ivar),ier
+cCHC/NRC            write(logUnit, *)  'uv_unit,ni, ip3, nk,etiket,ip1,step(istep)=',
+cCHC/NRC     &               uv_unit,ni, ip3, nk,etiket,ip1,step(istep)
+c*** debug
+            if (ier.lt.0) then
+            write(logUnit, *) '    NO data found for climate state'
+                        goto 99
+              end if
+            write(logUnit, *) '    Found: ', var_n_rpn(ivar)
+
+         enddo
+        etat = etat + 1
+
+
+         etiket_ok=etiket
+         if (normalize) then
+            call norm_it
+     $      (field(1,1,1),field(1,1,2),z0,ustar,uv_norm,zuv,z0_class,
+     $           imx,jmx, logUnit)
+         endif
+*
+*     stats
+*
+*     compute 0.5*V3
+*
+*     include change of target height (z_stats) using power law
+         do j=1,nj
+            do i=1,ni
+               if ( powerlaw .eq. 1 ) then
+                  u(i,j)=field(i,j,1)*z_factor * kt2ms
+                  v(i,j)=field(i,j,2)*z_factor * kt2ms
+               else
+                  u(i,j) = field(i,j,1) * kt2ms
+     &                    * log(z_stats/z0(i,j)) / log(zuv/z0(i,j))
+                  v(i,j) = field(i,j,2) * kt2ms
+     &                    * log(z_stats/z0(i,j)) / log(zuv/z0(i,j))
+               endif
+               we(i,j)=0.5*(u(i,j)**2+v(i,j)**2)**1.5
+            enddo
+         enddo
+*     do the running average.
+            do j=1,nj
+               do i=1,ni
+                  e1(i,j)=e1(i,j)+ we(i,j)    *freq/100
+                  e2(i,j)=e2(i,j)+(we(i,j)**2)*freq/100
+                  en(i,j)=en(i,j)+   1.0      *freq/100
+                  eu(i,j)=eu(i,j)+ u(i,j) / kt2ms   *freq/100
+                  ev(i,j)=ev(i,j)+ v(i,j) / kt2ms   *freq/100
+                  euv(i,j)=euv(i,j)
+     $              + sqrt(u(i,j)**2+v(i,j)**2)*freq/100
+                  eu2(i,j)=eu2(i,j)+(u(i,j)**2+v(i,j)**2)*freq/100
+               enddo
+            enddo
+c*** debug
+       write(logUnit, *) '    etat, u, v, freq, euv'
+       write(logUnit, *) '     ',etat, u(1,1)/kt2ms, v(1,1)/kt2ms, freq, euv(1,1)
+c       write(logUnit, *)  '  etat,u,v,freq,euv=',
+c     &         etat, u(1,1)/kt2ms,v(1,1)/kt2ms,freq,euv(1,1)
+c*** debug
+*     histogram
+            do k=1,nclass
+               do j=1,nj
+                  do i=1,ni
+                     val=we(i,j)
+                     if (class(k).le.val.and.val.lt.class(k+1))
+     $                    eh(i,j,k)=eh(i,j,k)+1.0*freq/100
+                  enddo
+               enddo
+            enddo
+c
+            do j=1,nj
+               do i=1,ni
+                  val= sqrt( u(i,j)**2 + v(i,j)**2 )
+                  if ( val .le. classv(0) ) then
+                     uh(i,j,0) = uh(i,j,0) + 1.0 * freq / 100.
+                  else if ( val .ge. classv(maxv) ) then
+                     uh(i,j,maxv+1) = uh(i,j,maxv+1) + 1.0 * freq / 100.
+                  else
+                     do k = 1, maxv
+                        if( val .ge. classv(k-1) .and.
+     &                                         val .lt. classv(k) ) then
+                           uh(i,j,k) = uh(i,j,k) + 1.0 * freq / 100.
+                           goto 31
+                        endif
+                     enddo
+                     write(logUnit, *)  'ERROR: Unexpected wind speed'
+!CHC/NRC                     stop
+                                        stats_we = .FALSE.                              !CHC/NRC
+                                        return                                                  !CHC/NRC
+                  endif
+ 31               continue
+               enddo
+            enddo
+c
+*     wind rose
+
+*** AG_25 juin ** another way to determine angles
+*** AG_25 juin   START******
+
+      gdid = ezqkdef(ni, nj, 'Z', ig1, ig2, ig3, ig4, uv_unit)
+      ier = gdll(gdid, lat, lon)
+c_Anthony - 2011-02
+c      call gdwdfuv(gdid, spdllout, dirllout, u, v, lat, lon, ni*nj)
+      ier = gdwdfuv(gdid, spdllout, dirllout, u, v, lat, lon, ni*nj)
+
+*** AG_25 juin  END********
+            do j=1,nj
+               do i=1,ni
+
+*** another way to determine angles, next line replaces commented
+                   val=dirllout(i,j)
+*     atan2(Y,X).  les u,v sont sur grille X,Y du mc2 (dgrw)
+c_AG                  val=atan2d(-v(i,j),-u(i,j)) ! direction source
+*     ajouter angle de 'EST' a 'X' (alpha) math convention (+=anticloc)
+c_AG                  val=val+alpha
+*     to degrees, with 0=north  [0-360]  meteo convention (+=cloc)
+c_AG                  val=90.-val
+*     if (val.lt.dd_sect0) val=val+360.
+
+                  if (val.lt.0.) val=val+360.
+*     put in proper sector
+                  val=val-dd_sect0
+                  if (val.lt.0.) val=val+360.
+*     k=1+(val-dd_sect0)/del_dd
+                  k=1+(val)/del_dd
+                  if (k.lt.1.or.k.gt.nsect) then
+                     write(logUnit, *)
+     $                       'k, i,j,u(i,j),v(i,j),val,dd_sect0,del_dd='
+                     write(logUnit, *) k, i,j,u(i,j),v(i,j),val,dd_sect0,del_dd
+!CHC/NRC                     stop 'k'
+                     write(logUnit, *) 'ERROR: (k.lt.1.or.k.gt.nsect)'  !CHC/NRC
+                                   stats_we = .FALSE.                                           !CHC/NRC
+                                   close(logUnit);
+                                   return                                                                       !CHC/NRC
+                  endif
+!CHC/NRC                  if (i.eq.62.and.j.eq.57.and.k.eq.3) then
+!CHC/NRC                     write(logUnit, *) 'watch',k, i,j,u(i,j),v(i,j),val,freq
+!CHC/NRC                  endif
+                  ewr(i,j,k)=ewr(i,j,k)+1.0*freq/100
+*                 ewr_n(i,j,k)=ewr_n(i,j,k)+1.0  !events in that sector
+                  ewr(i,j,nsect+1)=ewr(i,j,nsect+1)+1
+c
+ccc
+c
+                  val = sqrt( u(i,j)**2 + v(i,j)**2 )
+                  eur(i,j,k) = eur(i,j,k) + val * freq / 100.
+c
+                  if ( val .le. classv(0) ) then
+                     uhr(i,j,0,k) = uhr(i,j,0,k) + 1.0 * freq / 100.
+                  else if ( val .ge. classv(maxv) ) then
+                     uhr(i,j,maxv+1,k) = uhr(i,j,maxv+1,k)
+     &                                  + 1.0 * freq / 100.
+                  else
+                     do n = 1, maxv
+                        if( val .ge. classv(n-1) .and.
+     &                                         val .lt. classv(n) ) then
+                           uhr(i,j,n,k) = uhr(i,j,n,k)
+     &                                   + 1.0 * freq / 100.
+                           goto 32
+                        endif
+                     enddo
+                     write(logUnit, *)  'ERROR: Unexpected wind speed'
+!CHC/NRC                     stop
+                                   stats_we = .FALSE.                                           !CHC/NRC
+                                   close(logUnit);
+                                   return                                                                       !CHC/NRC
+                  endif
+ 32               continue
+c
+ccc
+c
+               enddo
+            enddo
+
+*     current value of cumulated frequencies
+c            write(logUnit, '(a,i4,1x,a,2f5.2)') '    etat, etiket, freq, sum(freq)='
+c     $           ,etat, etiket,freq,en(1,1)
+       write(logUnit, *) '     sum(freq) = ', en(1,1)
+c       write(logUnit, *) '    etat, etiket, freq, sum(freq)'
+c       write(logUnit, *) '    ',etat, etiket,freq,en(1,1)
+
+*
+*     end running stats
+*
+ 99         continue   ! for etiket not found above
+      enddo
+*
+* AG_25 juin
+* following 12 lines are moved before loop etats as gdwdfuv need it
+
+*     after last read, to get the IGs (due to Z record type
+*
+c_AG      write(logUnit, *) ' calling fstinf after loop etats'
+c_AG      ier = fstinf(uv_unit, ni, nj, nk, -1, etiket_ok, -1, -1,
+c_AG     $             step(istep),
+c_AG     $             '', 'UU')
+c_AG   i = fstprm(ier, dateo, deet, npas, ni, nj, nk, nbits, datyp,
+c_AG     $     ip1,
+c_AG     $     ip2, ip3, typvar, nomvar, etiket, grtyp, ig1, ig2, ig3,
+c_AG     $     ig4, swa, lng, dltf, ubc, extra1, extra2, extra3)
+c_AG      write(logUnit, *) ' ig...=',ig1, ig2, ig3,ig4
+*
+*     finalize stats
+*
+      do j=1,nj
+         do i=1,ni
+            val=en(i,j)
+            e1(i,j)=e1(i,j)/val
+*     var=s2/n-(s/n)**2
+            e2(i,j)=sqrt(e2(i,j)/val-e1(i,j)**2)
+            eu(i,j)=  eu(i,j)/val
+            ev(i,j)=  ev(i,j)/val
+            euv(i,j)=euv(i,j)/val
+            eu2(i,j)=sqrt(eu2(i,j)/val-euv(i,j)**2)
+         enddo
+      enddo
+c
+      do k = 0, maxv+1
+         do j=1,nj
+            do i=1,ni
+               val=en(i,j)
+               uh(i,j,k)=uh(i,j,k)/val
+               do n = 1, nsect+1
+                  uhr(i,j,k,n) = uhr(i,j,k,n) / val
+               enddo
+            enddo
+         enddo
+      end do
+c
+      do k=1,nclass
+         do j=1,nj
+            do i=1,ni
+               val=en(i,j)
+               eh(i,j,k)=eh(i,j,k)/val
+            enddo
+         enddo
+*     initialize top cumulation
+         do j=1,nj
+            do i=1,ni
+               ec(i,j,nclass)=eh(i,j,nclass)
+            enddo
+         enddo
+      enddo
+*     top cumulation in ec
+      do k=nclass-1,1,-1
+         do j=1,nj
+            do i=1,ni
+               ec(i,j,k)=ec(i,j,k+1)+eh(i,j,k)
+            enddo
+         enddo
+      enddo
+*     windrose
+      val_min=0
+      val_max=0
+      do k=1,nsect
+         do j=1,nj
+            do i=1,ni
+*     to handle the small sample problem in the division by WR
+*     widen the windrose stats to (1+-ndx_rose) neighbourhood
+               jj1=max( 1, j-ndx_rose)
+               jj2=min(nj, j+ndx_rose)
+               ii1=max(1,  i-ndx_rose)
+               ii2=min(ni, i+ndx_rose)
+               val_n=0.
+               val_wr=0.
+               val_ur=0.
+c
+ccc
+c
+               do n = 0, maxv+1
+                  val_uhr(n) = 0.
+               enddo
+c
+ccc
+c
+               val_k=0.
+               do jj=jj1,jj2
+                  do ii=ii1,ii2
+                     if (ewr(ii,jj,k).gt.0.0) then
+                        val_k=val_k+1  !count the number of cells
+*                    val_n =val_n +ewr_n(ii,jj)
+                        val_n =val_n +en(ii,jj)
+                        val_wr=val_wr+ewr(ii,jj,k)
+                        val_ur=val_ur+eur(ii,jj,k)/ewr(ii,jj,k)
+c
+ccc
+c
+                        do n = 0, maxv+1
+                           val_uhr(n) = val_uhr(n) + uhr(ii,jj,n,k)
+                        enddo
+c
+ccc
+c
+                     endif
+                  enddo
+               enddo
+               if (val_k.gt.0) then
+                  eur_n(i,j,k)=val_ur/val_k
+                  ewr_n(i,j,k)=val_wr/val_n
+c                  if (val_k.ne.val_n) then
+c                    write(logUnit, *) ' val_k,val_n=',val_k,val_n
+c                  endif
+c
+ccc
+c
+                  do n = 0, maxv+1
+                     uhr(i,j,n,k) = val_uhr(n) / val_k
+                  enddo
+c
+ccc
+c
+               else
+                  eur_n(i,j,k)=0.
+                  ewr_n(i,j,k)=0.
+c
+ccc
+c
+                  do n = 0, maxv+1
+                     uhr(i,j,n,k) = 0.
+                  enddo
+c
+ccc
+c
+               endif
+c
+               if (k.eq.1) then
+c                  write(logUnit, *) ' i,j,k,ii1,ii2,jj1,jj2,ewr_n,eur_n=',
+c     $                 i,j,k,ii1,ii2,jj1,jj2,ewr_n(i,j,k),eur_n(i,j,k)
+                  val_min=min(val_min,eur_n(i,j,k))
+                  val_max=max(val_max,eur_n(i,j,k))
+               endif
+            enddo
+         enddo
+      enddo
+      write(logUnit, *) ' val_min,val_max=',val_min,val_max
+*     windrose checksum
+      do j=1,nj
+         do i=1,ni
+            ewr(i,j,nsect+1)=0.
+            ewr_n(i,j,nsect+1)=0.
+            eur(i,j,nsect+1)=0.
+c
+ccc
+c
+            do n = 0, maxv+1
+               uhr(i,j,n,nsect+1) = 0.
+            enddo
+c
+ccc
+c
+            do k=1,nsect
+*              ewr(i,j,k)=ewr_n(i,j,k)
+               eur(i,j,k)=eur_n(i,j,k)
+               ewr(i,j,nsect+1)=ewr(i,j,nsect+1)+ewr(i,j,k)
+               ewr_n(i,j,nsect+1)=ewr_n(i,j,nsect+1)+ewr_n(i,j,k)
+c Aug 8/05 Change from Laurent
+c               eur(i,j,nsect+1)=eur(i,j,nsect+1)+eur(i,j,k)*ewr(i,j,k)
+               eur(i,j,nsect+1)=eur(i,j,nsect+1)+eur(i,j,k)*ewr_n(i,j,k)
+ccc
+c
+           do n = 0, maxv+1
+              uhr(i,j,n,nsect+1) = uhr(i,j,n,nsect+1) + uhr(i,j,n,k)
+           enddo
+c
+ccc
+c
+            enddo
+         enddo
+      enddo
+c
+C_AG_03aout_2004_start
+      do j=1,nj
+         do i=1,ni
+           do n = 0, maxv
+      uhr(i,j,maxv+1,nsect+1)=uhr(i,j,maxv+1,nsect+1)+uhr(i,j,n,nsect+1)
+           enddo
+         enddo
+      enddo
+C_AG_03aout_2004_end
+*
+*     write to file
+*
+*     npak=-32
+      npak=-16
+      datev=0
+      etiket=id_rpn(1:3)
+      if ( nint(z_stats) .lt. 10 ) then
+         write (etiket,'(a,i1)') id_rpn(1:3)//'____', nint(z_stats)
+      else if ( nint(z_stats) .ge. 10 .and. nint(z_stats) .lt. 100 )then
+         write (etiket,'(a,i2)') id_rpn(1:3)//'___', nint(z_stats)
+      else
+         write (etiket,'(a,i3)') id_rpn(1:3)//'__', nint(z_stats)
+      endif
+*
+*     IGs and IP1 from fstparm of last UU input record
+*
+      ier = FSTECR(e1, WORK2, npak, we_unit, datev, 0, 0, ni, nj,
+     $     1, ip1, 0, 0, 'A', 'E1', etiket, 'Z',
+     $     ig1, ig2, ig3, ig4, 1, .true.)
+      ier = FSTECR(e2, WORK2, npak, we_unit, datev, 0, 0, ni, nj,
+     $     1, ip1, 0, 0, 'A', 'E2', etiket, 'Z',
+     $     ig1, ig2, ig3, ig4, 1, .true.)
+      ier = FSTECR(en, WORK2, npak, we_unit, datev, 0, 0, ni, nj,
+     $     1, ip1, 0, 0, 'A', 'EN', etiket, 'Z',
+     $     ig1, ig2, ig3, ig4, 1, .true.)
+      ier = FSTECR(eu, WORK2, npak, we_unit, datev, 0, 0, ni, nj,
+     $     1, ip1, 0, 0, 'A', 'UU', etiket, 'Z',
+     $     ig1, ig2, ig3, ig4, 1, .true.)
+      ier = FSTECR(ev, WORK2, npak, we_unit, datev, 0, 0, ni, nj,
+     $     1, ip1, 0, 0, 'A', 'VV', etiket, 'Z',
+     $     ig1, ig2, ig3, ig4, 1, .true.)
+      ier = FSTECR(euv, WORK2, npak, we_unit, datev, 0, 0, ni, nj,
+     $     1, ip1, 0, nint(z_stats), 'A', 'EU', etiket, 'Z',
+     $     ig1, ig2, ig3, ig4, 1, .true.)
+      ier = FSTECR(eu2, WORK2, npak, we_unit, datev, 0, 0, ni, nj,
+     $     1, ip1, 0, 0, 'A', 'EU2', etiket, 'Z',
+     $     ig1, ig2, ig3, ig4, 1, .true.)
+c
+      do k = 0, maxv+1
+         ier = FSTECR(uh(1,1,k), WORK2, npak, we_unit, datev, 0, 0,
+     $        ni, nj, 1, k , 0, 0, 'A', 'UH', etiket, 'Z',
+     $        ig1, ig2, ig3, ig4, 1, .true.)
+      enddo
+c
+      do k=1,nclass
+         ier = FSTECR(eh(1,1,k), WORK2, npak, we_unit, datev, 0, 0,
+     $        ni, nj, 1, k , 0, 0, 'A', 'EH', etiket, 'Z',
+     $        ig1, ig2, ig3, ig4, 1, .true.)
+         ier = FSTECR(ec(1,1,k), WORK2, npak, we_unit, datev, 0, 0,
+     $        ni, nj, 1, k , 0, 0, 'A', 'EC', etiket, 'Z',
+     $        ig1, ig2, ig3, ig4, 1, .true.)
+      enddo
+      do k=1,nsect
+         i=(k-1)*del_dd         !central direction of sector
+         ier = FSTECR(ewr(1,1,k), WORK2, npak, we_unit, datev, 0, 0,
+     $        ni, nj, 1, i , 0, 0, 'A', 'ER', etiket, 'Z',
+     $        ig1, ig2, ig3, ig4, 1, .true.)
+         ier = FSTECR(eur(1,1,k), WORK2, npak, we_unit, datev, 0, 0,
+     $        ni, nj, 1, i , 0, 0, 'A', 'UR', etiket, 'Z',
+     $        ig1, ig2, ig3, ig4, 1, .true.)
+         ier = FSTECR(ewr_n(1,1,k), WORK2, npak, we_unit, datev, 0, 0,
+     $        ni, nj, 1, i , 0, ndx_rose, 'A', 'ERN', etiket, 'Z',
+     $        ig1, ig2, ig3, ig4, 1, .true.)
+c
+ccc
+c
+         do n = 0, maxv+1
+            ier = fstecr( uhr(1,1,n,k), work2, npak, we_unit, datev,
+     &                    0, 0, ni, nj, 1, i , n, ndx_rose, 'A', 'UHR',
+     &                    etiket, 'Z', ig1, ig2, ig3, ig4, 1, .true. )
+         enddo
+c
+ccc
+c
+      enddo
+*     write the checksum for windrose
+      ier = FSTECR(ewr(1,1,nsect+1), WORK2, npak, we_unit, datev, 0, 0,
+     $     ni, nj, 1, 360 , 0, 0, 'A', 'ER', etiket, 'Z',
+     $     ig1, ig2, ig3, ig4, 1, .true.)
+      ier = FSTECR(ewr_n(1,1,nsect+1), WORK2, npak, we_unit, datev,0,0,
+     $     ni, nj, 1, 360 , 0, ndx_rose, 'A', 'ERN', etiket, 'Z',
+     $     ig1, ig2, ig3, ig4, 1, .true.)
+      ier = FSTECR(eur(1,1,nsect+1), WORK2, npak, we_unit, datev, 0, 0,
+     $     ni, nj, 1, 360 , 0, 0, 'A', 'UR', etiket, 'Z',
+     $     ig1, ig2, ig3, ig4, 1, .true.)
+c
+ccc
+c
+      do n = 0, maxv+1
+         ier = fstecr( uhr(1,1,n,nsect+1), work2, npak, we_unit, datev,
+     &                 0, 0, ni, nj, 1, 360, n, ndx_rose, 'A', 'UHR',
+     &                 etiket, 'Z', ig1, ig2, ig3, ig4, 1, .true. )
+      enddo
+c
+ccc
+c
+
+      if (normalize) then
+*     to debug the normalize
+         ier = FSTECR(ustar, WORK2, npak, we_unit, datev, 0, 0, ni, nj,
+     $        1, 0, 0, 0, 'A', 'UE', etiket, 'Z',
+     $        ig1, ig2, ig3, ig4, 1, .true.)
+         ier = FSTECR(uv_norm, WORK2, npak, we_unit, datev, 0, 0, ni,
+     $        nj, 1, 0, 0, 0, 'A', 'UN', etiket, 'Z',
+     $        ig1, ig2, ig3, ig4, 1, .true.)
+      endif
+*
+*     text file for wind rose plot
+*
+c      write (rose_unit,'(a,2i5)') '#',i_wr_out,j_wr_out
+c      do k=1,nsect
+c         i=(k-1)*del_dd         !central direction of sector
+*     put i wrt to x and + anticlockwise
+c         i=90-i
+*     0-360
+c         if (i.lt.0) i=i+360
+c         if (i.gt.360) i=i-360
+*     to radians
+*     i=i*deg2rad
+c         write (rose_unit,'(i10,f10.2)') i,ewr(i_wr_out,j_wr_out,k)
+c      enddo
+*
+      ier = fstfrm ( uv_unit )
+      ier = fclos  ( uv_unit )
+      ier = fstfrm ( we_unit )
+      ier = fclos  ( we_unit )
+      ier = fclos  ( table_unit )
+c      ier = fclos  ( rose_unit )
+      ier = gdrls  (gdid)
+
+ 120  format ( i4, 3i3, i4, 1x, a10 )
+ 130  format ( 10g13.5 )
+
+c     -----------------------------------------------------------------
+!CHC/NRC      stop
+        write(logUnit, *) ' *********************************'          !CHC/NRC
+        write(logUnit, *) ' SUCCESSFUL completion of stats_we'          !CHC/NRC
+        stats_we = .TRUE.                                                               !CHC/NRC
+        close(logUnit);
+        return                                                                                  !CHC/NRC
+
+
+9876    write(logUnit, *) ' ***************************************************************'            !CHC/NRC
+        write(logUnit, *) ' ERROR: END-OF-FILE encountered while reading climate state table'           !CHC/NRC
+        write(logUnit, *) '   ', table_name
+        stats_we = .FALSE.                                                              !CHC/NRC
+        ier = fstfrm ( uv_unit )
+        ier = fclos  ( uv_unit )
+        ier = fstfrm ( we_unit )
+        ier = fclos  ( we_unit )
+        ier = fclos  ( table_unit )
+c       ier = fclos  ( rose_unit )
+        close(logUnit);
+        return                                                                                  !CHC/NRC
+
+9875    write(logUnit, *) ' ***************************************************************'            !CHC/NRC
+        write(logUnit, *) ' ERROR: encountered while reading climate state table'               !CHC/NRC
+        write(logUnit, *) '   ', table_name
+        stats_we = .FALSE.                                                              !CHC/NRC
+        ier = fstfrm ( uv_unit )
+        ier = fclos  ( uv_unit )
+        ier = fstfrm ( we_unit )
+        ier = fclos  ( we_unit )
+        ier = fclos  ( table_unit )
+c       ier = fclos  ( rose_unit )
+        close(logUnit);
+        return                                                                                  !CHC/NRC
+
+      end

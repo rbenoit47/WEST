@@ -1,0 +1,144 @@
+*    WEST   Wind simulation application
+*    Copyright (C) 2010-2011  "Her Majesty the Queen in Right of Canada"
+*    Contact: service.rpn@ec.gc.ca
+*    Authors: R. Benoit, A. Glazer
+*
+*    This library is free software; you can redistribute it and/or
+*    modify it under the terms of the GNU Lesser General Public
+*    License as published by the Free Software Foundation; either
+*    version 2.1 of the License, or (at your option) any later version.
+*
+*    This library is distributed in the hope that it will be useful,
+*    but WITHOUT ANY WARRANTY; without even the implied warranty of
+*    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+*    Lesser General Public License for more details.
+*
+*    You should have received a copy of the GNU Lesser General Public
+*    License along with this library; if not, write to the Free Software
+*    Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+    
+!-------------------------------------------------------------------------------
+!CHC/NRC      subroutine norm_it(u,v,zzero,ue,uv_norm,zuv,z0_fix,ni,nj)
+      LOGICAL FUNCTION norm_it(u,v,zzero,ue,uv_norm,zuv,z0_fix,ni,nj, logUnit)	!CHC/NRC
+
+*      LOGICAL norm_it			!CHC/NRC
+	 
+      implicit none
+
+	integer logUnit
+
+      integer ni,nj
+      real u(ni,nj),v(ni,nj),zzero(ni,nj),zuv,z0_fix
+      real uv_norm(ni,nj)
+*
+      real karman,a,b,b2
+      real ue(ni,nj), gg(ni,nj), fcor(ni,nj)
+      data a,b,karman/0.9,4.5,0.35/
+      integer i,j, nit,nitmax
+      real ueg,ued,uemin,uemax,eps,yg,yd,y,signeyg,signeyd,signey
+      real uv,z0_ij
+      real ueopp,deltaue
+*     eps=delta ue / ue
+      data uemin,uemax/0.00001, 100./, nitmax/100/,eps/0.001/
+      b2=b*b
+*
+*--------------------
+*
+*     (a) from u to ustar to geostrophic
+*
+      do i=1,ni
+         do j=1,nj
+            fcor(i,j)=1.e-4  !interim
+            uv=sqrt(u(i,j)**2+v(i,j)**2)
+            ue(i,j)=karman/alog((zuv+zzero(i,j))/zzero(i,j))*uv  ! RPN PHYS
+            gg(i,j)=ue(i,j)/karman*sqrt(
+     $           (alog(ue(i,j)/(abs(fcor(i,j))*zzero(i,j)))-a)**2+b2)
+         enddo
+      enddo
+      i=ni
+      j=nj
+      write(logUnit, *) 'i,j,u,v,uv,ue,gg,fcor=',
+     $     i,j,u(i,j),v(i,j),uv,ue(i,j),gg(i,j),fcor(i,j)
+      write(logUnit, *)karman,zuv,zzero(i,j)
+*     stop
+*     return
+*
+*     Calcul de Uetoile, le stress de surface par dichotomie
+*
+      do i=1,ni
+         do j=1,nj
+            z0_ij=z0_fix
+            nit=0
+            ueg=uemin
+            ued=uemax
+            ue(i,j)=(ueg+ued)/2.
+*
+ 50         nit=nit+1
+            if (nit.gt.nitmax) then
+               write(logUnit, *) 'Calcul du stress de surface impossible'
+               write(logUnit, *) 'Nombre max d iteration depasse'
+!CHC/NRC               stop
+               norm_it = .FALSE.		!CHC/NRC
+               return					!CHC/NRC
+            endif
+            yg=ueg/karman * sqrt((alog(ueg/(fcor(i,j)*
+     $            z0_ij)) - A)**2. + B**2) -gg(i,j)
+            if (yg.lt.0.) then
+               signeyg=-1
+            else
+               signeyg=+1
+            endif
+            yd=ued/karman * sqrt((alog(ued/(fcor(i,j)*
+     $            z0_ij)) - A)**2. + B**2) - gg(i,j)
+            if (yd.lt.0.) then
+               signeyd=-1
+            else
+               signeyd=+1
+            endif
+            if (signeyg.eq.signeyd) then
+               write(logUnit, *) 'Calcul du stress de surface impossible'
+!CHC/NRC               stop
+	         norm_it = .FALSE.	!CHC/NRC
+               return				!CHC/NRC
+            endif
+*
+            y=ue(i,j)/karman * sqrt((alog(ue(i,j)/(fcor(i,j)*
+     $            z0_ij)) - A)**2. + B**2) - gg(i,j)
+*
+            if (y.lt.0.) then
+               signey=-1
+            else
+               signey=+1
+            endif
+*
+            if (signey.ne.signeyg) then
+               ued=ue(i,j)
+               ueopp=ueg
+            else
+               ueg=ue(i,j)
+               ueopp=ued
+            endif
+            ue(i,j)=(ue(i,j)+ueopp)/2.
+*
+            deltaue=sqrt((ue(i,j)-ueopp)**2.)
+            if ((deltaue/ue(i,j)).lt.eps) then
+               goto 100
+            else
+               goto 50
+            endif
+*
+ 100        continue
+*
+*     end of iterations
+            uv_norm(i,j)=ue(i,j)*alog((zuv+z0_ij)/z0_ij)/karman
+*     u(i,j)=uv_class*u(i,j)/uv
+*     v(i,j)=uv_class*v(i,j)/uv
+         enddo
+      enddo
+*
+*
+*
+*     stop
+	norm_it = .TRUE.	!CHC/NRC
+      return	!CHC/NRC
+      end
