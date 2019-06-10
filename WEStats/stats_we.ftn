@@ -118,6 +118,8 @@ c
      $                          ! (imx,jmx)
       character *2 region
       logical normalize
+      logical endTableRead !RB 2019
+      integer countNoData  !RB 2019
       real  zuv, z0_class
       real z_stats, shear_exp, z_factor
       integer hx,hy,ni_z0,nj_z0
@@ -435,7 +437,9 @@ c       write(logUnit, *) '  to match UU and VV records in file:'
 cCHC/NRC      do etat=1,n_etats
 
         etat = 0
-        do while(etat .lt. n_etats)
+        endTableRead = .false.  !RB 2019
+        countNoData = 0  !RB 2019
+        do while(etat .lt. n_etats .and. .not. endTableRead)  !RB 2019
 
 
 
@@ -444,8 +448,9 @@ cCHC/NRC      do etat=1,n_etats
      $        id_rpn, id_riso, dd_tab, uv_tab,shear,freq,weight
          else
 *     freq is in percent unit i.e. 0<=freq<=100
-            read (table_unit,*, end=9876, err=9875),
-
+!RB 2019    read (table_unit,*, end=9876, err=9875),
+!RB 2019  allow case with table having different (less?) number of states than the set of simulations 
+            read (table_unit,*, iostat=ier),
 c****************AG****************comments******
 C_AGc     $        id_rpn, dd_tab, uv_tab,shear,freq,weight
 C_AG     $        id_rpn, bidon, bidon, bidon, bidon, bidon, bidon, bidon,
@@ -456,6 +461,17 @@ c****************AG****************comments******
      $        id_rpn, dd_tab, uv_tab,shear,freq,weight,bidon, bidon,
      &        bidon, bidon, bidon, bidon, bidon, bidon, bidon, bidon,
      &        bidon, bidon, bidon
+!RB 2019<
+            if (ier .gt.  0) goto 9875
+            if (ier .eq. -1) then
+            	write(logUnit,*) 'End-of-file condition reached. etat=',etat,' n_etats=',n_etats
+            	write(logUnit,*) 'End table read loop and continue processing'
+            	! Resetting n_etats to etats.
+            	!n_etats=etat + 1
+            	endTableRead=.true.
+            	goto 99
+            endif
+!RB 2019>
 cCHC/NRC              write(logUnit, *)  'Read climate state:', id_rpn, 'freq:', freq
 c              write(logUnit, *)  'id_rpn, freq=', id_rpn, freq
          endif
@@ -484,6 +500,7 @@ cCHC/NRC     &               uv_unit,ni, ip3, nk,etiket,ip1,step(istep)
 c*** debug
             if (ier.lt.0) then
             write(logUnit, *) '    NO data found for climate state'
+            countNoData = countNoData + 1  !RB 2019
                         goto 99
               end if
             write(logUnit, *) '    Found: ', var_n_rpn(ivar)
@@ -995,6 +1012,7 @@ c     -----------------------------------------------------------------
 !CHC/NRC      stop
         write(logUnit, *) ' *********************************'          !CHC/NRC
         write(logUnit, *) ' SUCCESSFUL completion of stats_we'          !CHC/NRC
+        write(logUnit, *) ' # States in table but absent in SIMS:',countNoData  !RB 2019
         stats_we = .TRUE.                                                               !CHC/NRC
         close(logUnit);
         return                                                                                  !CHC/NRC
